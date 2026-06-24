@@ -1,6 +1,6 @@
 ---
 id: kr-9yom
-status: open
+status: closed
 deps: [kr-64zs]
 links: []
 created: 2026-06-24T17:47:53Z
@@ -21,3 +21,7 @@ search_registry: resolve_uri → absolute path for rg. display_path in header ou
 dump_registry: resolve_uri → absolute path for file read. display_path in header (// ~/src/main.rs [L1-L30] — label)
 source list: show resolved display_path instead of raw URI
 kr discover: format folder paths with ~/ where applicable
+
+**2026-06-24T17:57:23Z**
+
+search/dump headers use display_path. source list/registry show use resolved paths. discover uses ~/ format. All display paths consistent.

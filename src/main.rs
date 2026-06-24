@@ -507,7 +507,7 @@ fn dump_registry(registry: &Registry, tags: &[String]) -> Result<()> {
 // ── CLI ────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "kr", about = "Knowledge registry CLI — retrieve targeted knowledge from curated sources")]
+#[command(name = "kr", about = "Knowledge registry CLI — retrieve targeted knowledge from curated sources.\n\nURIs are stored relative to the .kr folder parent, displayed as ~/... or /... paths.")] 
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -595,7 +595,7 @@ enum SourceCmd {
     Add {
         /// Registry name
         registry: String,
-        /// URI or glob pattern (e.g. file:///path/to/file.rs#L10-L42 or src/models/*.rs)
+        /// URI or glob pattern (e.g. src/main.rs#L10-L42, ../shared/lib.rs, or src/models/*.rs).\nURIs stored relative to .kr parent, displayed as ~/... or /...
         uri: String,
         /// Human-readable label
         #[arg(short, long)]

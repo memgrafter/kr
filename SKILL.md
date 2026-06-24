@@ -39,6 +39,8 @@ kr registry delete <name>
 
 URI formats: `file:///path.rs` (full file), `file:///path.rs#L10-L42` (range), `file:///path.rs#L10` (from line 10 to end).
 
+**Path resolution**: URIs are stored relative to the `.kr` folder parent. At display time, paths resolve to `~/...` if under home, `/...` otherwise — no brittle absolute paths in the registry file.
+
 ## Examples
 
 ```bash

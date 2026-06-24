@@ -22,7 +22,7 @@ Coding agents need focused context. Scrolling through entire repos wastes tokens
   "created": "2025-06-23T...",
   "sources": [
     {
-      "uri": "file:///path/to/project/src/main.rs#L1-L80",
+      "uri": "src/main.rs#L1-L80",       // stored relative to .kr parent
       "label": "main entry point",
       "tags": ["entrypoint", "app"],
       "added": "2025-06-23T..."
@@ -33,11 +33,15 @@ Coding agents need focused context. Scrolling through entire repos wastes tokens
 
 ### URI Scheme
 
+URIs are stored **relative to the `.kr` folder parent** — no brittle absolute paths. At display time, paths resolve to `~/...` if under home, `/...` otherwise.
+
 ```
-file:///absolute/path/to/file.ext          # entire file
-file:///absolute/path/to/file.ext#L10-L42   # line range
-file:///absolute/path/to/file.ext#L10       # single line
-file:///absolute/path/to/file.ext#C5-C12    # column range (future)
+src/main.rs                            # entire file (relative)
+src/main.rs#L10-L42                     # line range
+src/main.rs#L10                         # single line
+../shared/lib.rs                        # cross-project reference
+~/other-project/file.rs                 # home-relative reference
+file:///absolute/path.rs                # accepted for backward compat, stored as relative
 ```
 
 ### CLI Commands

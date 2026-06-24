@@ -1,6 +1,6 @@
 ---
 id: kr-qkur
-status: open
+status: closed
 deps: [kr-64zs]
 links: []
 created: 2026-06-24T17:47:53Z
@@ -25,3 +25,7 @@ Add tests/features.rs or new test file:
 - dump output uses ~/ in headers (integration test)
 - search output uses ~/ in headers (integration test)
 - glob registration stores relative URIs (check JSON content)
+
+**2026-06-24T18:04:24Z**
+
+9 tests in tests/resolution.rs: resolve relative URIs, display ~/ format, backward compat, storage format verification, full integration flow.

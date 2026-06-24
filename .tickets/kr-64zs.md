@@ -1,6 +1,6 @@
 ---
 id: kr-64zs
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-24T17:47:03Z
@@ -67,3 +67,7 @@ Key changes:
 - [ ] Test search output uses display_path in headers
 - [ ] Test glob registration stores relative URIs
 - [ ] Test backward compat: file:///absolute URI used as-is without error
+
+**2026-06-24T18:05:31Z**
+
+All 5 subtasks closed. 93/93 tests pass stable.
