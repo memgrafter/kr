@@ -371,7 +371,7 @@ fn dump_multiple_sources_shows_headers() {
     assert!(ok);
     assert!(out.contains("content A"));
     assert!(out.contains("content B"));
-    assert!(out.matches("──").count() >= 2);
+    assert!(out.matches("// ").count() >= 2);
 
     run(&["registry", "delete", &reg]);
     cleanup(&file_a);

@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use glob::glob;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
 // ── Domain Models ──────────────────────────────────────────────
 
-/// A URI-addressable knowledge source with optional line range and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Source {
     uri: String,
@@ -16,7 +16,6 @@ struct Source {
     added: String,
 }
 
-/// A named collection of knowledge sources.
 #[derive(Debug, Serialize, Deserialize)]
 struct Registry {
     name: String,
@@ -97,11 +96,9 @@ fn parse_uri(uri: &str) -> Result<ParsedUri> {
         let frag = frag.trim();
         if let Some(range) = frag.strip_prefix("L") {
             if let Some((s, rest)) = range.split_once('-') {
-                // L1-L30 or L1-L L30
                 line_start = Some(s.parse().context("parse start line")?);
                 line_end = Some(rest.trim_start_matches('L').parse().context("parse end line")?);
             } else {
-                // Single line: L42
                 line_start = Some(range.parse().context("parse single line")?);
             }
         }
@@ -123,12 +120,52 @@ fn uri_to_file_path(parsed: &ParsedUri) -> Option<PathBuf> {
     }
 }
 
+// ── Tag Filtering ──────────────────────────────────────────────
+
+fn filter_sources_by_tags<'a>(sources: &'a [Source], tags: &[String]) -> Vec<&'a Source> {
+    if tags.is_empty() {
+        sources.iter().collect()
+    } else {
+        sources
+            .iter()
+            .filter(|s| s.tags.iter().any(|t| tags.contains(t)))
+            .collect()
+    }
+}
+
+// ── Range Helpers ──────────────────────────────────────────────
+
+fn range_label(start: Option<usize>, end: Option<usize>) -> String {
+    match (start, end) {
+        (Some(s), Some(e)) => format!("L{}-L{}", s, e),
+        (Some(s), None) => format!("L{}+", s),
+        _ => String::new(),
+    }
+}
+
+fn extract_lines(content: &str, start: Option<usize>, end: Option<usize>) -> Vec<&str> {
+    let lines: Vec<&str> = content.lines().collect();
+    match (start, end) {
+        (Some(s), Some(e)) => {
+            let si = (s - 1).min(lines.len());
+            let ei = e.min(lines.len());
+            lines[si..ei].to_vec()
+        }
+        (Some(s), None) => {
+            let si = (s - 1).min(lines.len());
+            lines[si..].to_vec()
+        }
+        _ => lines,
+    }
+}
+
 // ── Search ─────────────────────────────────────────────────────
 
-fn search_registry(registry: &Registry, query: &str, context: usize) -> Result<()> {
+fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[String]) -> Result<()> {
+    let filtered = filter_sources_by_tags(&registry.sources, tags);
     let mut file_targets: Vec<(PathBuf, Option<usize>, Option<usize>)> = Vec::new();
 
-    for source in &registry.sources {
+    for source in filtered {
         let parsed = parse_uri(&source.uri).context(format!("parse URI {}", source.uri))?;
         if let Some(path) = uri_to_file_path(&parsed) {
             if path.exists() {
@@ -144,18 +181,15 @@ fn search_registry(registry: &Registry, query: &str, context: usize) -> Result<(
         return Ok(());
     }
 
-    // Build rg command for each file
     for (path, start, end) in &file_targets {
         let path_str = path.to_string_lossy().to_string();
 
-        // If there's a line range, pipe through sed first to limit search scope
-        let (input_cmd, input_arg) = match (start, end) {
+        match (start, end) {
             (Some(s), Some(e)) => {
                 let mut cmd = std::process::Command::new("sed");
                 cmd.arg("-n").arg(format!("{},{}p", s, e)).arg(path_str.clone());
                 let sed_out = cmd.output().context("run sed")?;
                 let lines = String::from_utf8_lossy(&sed_out.stdout);
-                // Search within extracted lines via rg reading from stdin
                 let mut rg = std::process::Command::new("rg");
                 rg.arg("--context")
                     .arg(context.to_string())
@@ -177,7 +211,7 @@ fn search_registry(registry: &Registry, query: &str, context: usize) -> Result<(
             (Some(s), None) => {
                 let mut cmd = std::process::Command::new("sed");
                 cmd.arg("-n");
-                cmd.arg(format!("{},$p", s)); // from line s to end
+                cmd.arg(format!("{},$p", s));
                 cmd.arg(path_str.clone());
                 let sed_out = cmd.output().context("run sed")?;
                 let lines = String::from_utf8_lossy(&sed_out.stdout);
@@ -199,14 +233,14 @@ fn search_registry(registry: &Registry, query: &str, context: usize) -> Result<(
                 }
                 continue;
             }
-            _ => ("rg".to_string(), path_str.clone()),
-        };
+            _ => {}
+        }
 
-        let mut cmd = std::process::Command::new(&input_cmd);
+        let mut cmd = std::process::Command::new("rg");
         cmd.arg("--context")
             .arg(context.to_string())
             .arg(query)
-            .arg(&input_arg);
+            .arg(path.to_string_lossy().to_string());
 
         let output = cmd.output().context("run rg")?;
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -221,8 +255,10 @@ fn search_registry(registry: &Registry, query: &str, context: usize) -> Result<(
 
 // ── Dump ───────────────────────────────────────────────────────
 
-fn dump_registry(registry: &Registry) -> Result<()> {
-    for source in &registry.sources {
+fn dump_registry(registry: &Registry, tags: &[String]) -> Result<()> {
+    let filtered = filter_sources_by_tags(&registry.sources, tags);
+
+    for source in filtered {
         let parsed = parse_uri(&source.uri).context(format!("parse URI {}", source.uri))?;
         if let Some(path) = uri_to_file_path(&parsed) {
             if !path.exists() {
@@ -230,30 +266,24 @@ fn dump_registry(registry: &Registry) -> Result<()> {
                 continue;
             }
 
-            println!("\n// ── {} ──", source.uri);
+            // Clean header with range info
+            let range = range_label(parsed.line_start, parsed.line_end);
             if let Some(ref label) = source.label {
-                println!("//   {}", label);
+                if !range.is_empty() {
+                    println!("\n// {} [{}] — {}", path.display(), range, label);
+                } else {
+                    println!("\n// {} — {}", path.display(), label);
+                }
+            } else if !range.is_empty() {
+                println!("\n// {} [{}]", path.display(), range);
+            } else {
+                println!("\n// {}", path.display());
             }
 
             let content = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-            let lines: Vec<&str> = content.lines().collect();
-
-            if let (Some(start), Some(end)) = (parsed.line_start, parsed.line_end) {
-                // Clamp to valid range
-                let start_idx = (start - 1).min(lines.len());
-                let end_idx = end.min(lines.len());
-                for i in start_idx..end_idx {
-                    println!("L{:>4} | {}", i + 1, lines[i]);
-                }
-            } else if let Some(start) = parsed.line_start {
-                let start_idx = (start - 1).min(lines.len());
-                for i in start_idx..lines.len() {
-                    println!("L{:>4} | {}", i + 1, lines[i]);
-                }
-            } else {
-                for (i, line) in lines.iter().enumerate() {
-                    println!("L{:>4} | {}", i + 1, line);
-                }
+            let selected = extract_lines(&content, parsed.line_start, parsed.line_end);
+            for line in &selected {
+                println!("{}", line);
             }
         }
     }
@@ -263,7 +293,7 @@ fn dump_registry(registry: &Registry) -> Result<()> {
 // ── CLI ────────────────────────────────────────────────────────
 
 #[derive(Parser)]
-#[command(name = "kr", about = "Knowledge registry CLI for managing context sources")]
+#[command(name = "kr", about = "Knowledge registry CLI — retrieve targeted knowledge from curated sources")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -290,11 +320,31 @@ enum Commands {
         /// Number of context lines (default: 2)
         #[arg(short, long, default_value_t = 2)]
         context: usize,
+        /// Comma-separated tags to filter sources
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
     },
     /// Dump all content from a registry to stdout
     Dump {
         /// Registry name
         registry: String,
+        /// Comma-separated tags to filter sources
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+    },
+    /// Export registry to JSON file or stdout
+    Export {
+        /// Registry name
+        registry: String,
+        /// Output file (defaults to stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+    },
+    /// Import registry from JSON file or stdin
+    Import {
+        /// Input file (defaults to stdin)
+        #[arg(short, long)]
+        input: Option<String>,
     },
 }
 
@@ -321,11 +371,11 @@ enum RegistryCmd {
 
 #[derive(Subcommand)]
 enum SourceCmd {
-    /// Add a source to a registry
+    /// Add a source to a registry (supports glob patterns)
     Add {
         /// Registry name
         registry: String,
-        /// URI (e.g. file:///path/to/file.rs#L10-L42)
+        /// URI or glob pattern (e.g. file:///path/to/file.rs#L10-L42 or src/models/*.rs)
         uri: String,
         /// Human-readable label
         #[arg(short, long)]
@@ -367,13 +417,39 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Registry { cmd } => handle_registry(cmd)?,
         Commands::Source { cmd } => handle_source(cmd)?,
-        Commands::Search { registry, query, context } => {
+        Commands::Search { registry, query, context, tags } => {
             let reg = load_registry(&registry)?;
-            search_registry(&reg, &query, context)?;
+            search_registry(&reg, &query, context, &tags)?;
         }
-        Commands::Dump { registry } => {
+        Commands::Dump { registry, tags } => {
             let reg = load_registry(&registry)?;
-            dump_registry(&reg)?;
+            dump_registry(&reg, &tags)?;
+        }
+        Commands::Export { registry, output } => {
+            let reg = load_registry(&registry)?;
+            let data = serde_json::to_string_pretty(&reg).context("serialize registry")?;
+            if let Some(path) = output {
+                fs::write(&path, &data).with_context(|| format!("write to {}", path))?;
+                println!("✓ Exported to {}", path);
+            } else {
+                print!("{}", data);
+            }
+        }
+        Commands::Import { input } => {
+            let data = if let Some(path) = input {
+                fs::read_to_string(&path).with_context(|| format!("read {}", path))?
+            } else {
+                use std::io::Read;
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                buf
+            };
+            let reg: Registry = serde_json::from_str(&data).context("parse registry JSON")?;
+            if registry_path(&reg.name).exists() {
+                anyhow::bail!("Registry '{}' already exists", reg.name);
+            }
+            save_registry(&reg)?;
+            println!("✓ Imported registry '{}' with {} sources", reg.name, reg.sources.len());
         }
     }
 
@@ -402,7 +478,7 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
                 println!("{:<20} {:<10} {}", "Name", "Sources", "Created");
                 println!("{}", "-".repeat(52));
                 for r in regs {
-                    let created = &r.created[..10]; // just the date
+                    let created = &r.created[..10];
                     println!("{:<20} {:<10} {}", r.name, r.sources.len(), created);
                 }
             }
@@ -434,17 +510,42 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
     match cmd {
         SourceCmd::Add { registry, uri, label, tags } => {
             let mut reg = load_registry(&registry)?;
-            // Validate URI parses
-            parse_uri(&uri).context("invalid URI format")?;
-            let source = Source {
-                uri,
-                label,
-                tags,
-                added: Utc::now().to_rfc3339(),
-            };
-            reg.sources.push(source);
-            save_registry(&reg)?;
-            println!("✓ Added source [{}]", reg.sources.len() - 1);
+            let base_idx = reg.sources.len();
+
+            // Check if this is a glob pattern (contains * or ?)
+            if uri.contains('*') || uri.contains('?') {
+                for entry in glob(&uri).context("glob pattern")? {
+                    match entry {
+                        Ok(path) => {
+                            let path_str = path.to_string_lossy().to_string();
+                            let file_uri = format!("file://{}", path_str);
+                            parse_uri(&file_uri).context(format!("invalid URI from glob: {}", path_str))?;
+                            let source = Source {
+                                uri: file_uri,
+                                label: label.clone(),
+                                tags: tags.clone(),
+                                added: Utc::now().to_rfc3339(),
+                            };
+                            reg.sources.push(source);
+                        }
+                        Err(e) => eprintln!("⚠  Glob error: {}", e),
+                    }
+                }
+                save_registry(&reg)?;
+                println!("✓ Added {} sources from glob", reg.sources.len() - base_idx);
+            } else {
+                // Single URI — validate it parses
+                parse_uri(&uri).context("invalid URI format")?;
+                let source = Source {
+                    uri,
+                    label,
+                    tags,
+                    added: Utc::now().to_rfc3339(),
+                };
+                reg.sources.push(source);
+                save_registry(&reg)?;
+                println!("✓ Added source [{}]", reg.sources.len() - 1);
+            }
         }
         SourceCmd::List { registry } => {
             let reg = load_registry(&registry)?;
