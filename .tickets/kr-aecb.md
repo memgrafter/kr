@@ -1,6 +1,6 @@
 ---
 id: kr-aecb
-status: open
+status: closed
 deps: [kr-yibl]
 links: []
 created: 2026-06-24T06:47:34Z
@@ -20,3 +20,7 @@ Example: kr --folder /path/to/kr search X query or kr --folder ~/.kr,/path/to/pr
 **2026-06-24T06:50:18Z**
 
 Comma-delimited list of specific kr folders: kr --folder ~/.kr,/path/to/project/.kr search X query. Overrides mode when specified.
+
+**2026-06-24T06:58:13Z**
+
+folder flag overrides mode. Uses shellexpand for ~ expansion.

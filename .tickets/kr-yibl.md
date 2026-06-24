@@ -1,6 +1,6 @@
 ---
 id: kr-yibl
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-24T06:47:34Z
@@ -20,3 +20,7 @@ tags: [config, discovery]
 **2026-06-24T06:50:18Z**
 
 Mode flag: --mode single (default, pwd/.kr only) or --mode all (all discovered up to home + .krrc folders). Config in .krrc sets default mode. Default is single to prevent footguns of accidentally searching across too many registries.
+
+**2026-06-24T06:57:59Z**
+
+mode: single (default) | all. .krrc YAML with mode + folders. Walk pwd → home.
