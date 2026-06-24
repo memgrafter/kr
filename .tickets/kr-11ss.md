@@ -1,6 +1,6 @@
 ---
 id: kr-11ss
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-24T06:41:51Z
@@ -16,3 +16,7 @@ tags: [retrieval, filtering]
 **2026-06-24T06:42:06Z**
 
 Allow broad registries with narrow retrieval. Example: kr search X query --tags core instead of creating separate registries per concern.
+
+**2026-06-24T06:47:01Z**
+
+filtering: kr search X query --tags core

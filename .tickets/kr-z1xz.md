@@ -1,6 +1,6 @@
 ---
 id: kr-z1xz
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-24T06:41:51Z
@@ -16,3 +16,7 @@ tags: [ux, registration]
 **2026-06-24T06:42:06Z**
 
 Currently: kr source add X file:///path.rs --label ... one at a time. Need: glob (src/models/*.rs), stdin pipe, or batch mode to reduce registration friction.
+
+**2026-06-24T06:47:01Z**
+
+glob: kr source add X 'src/models/*.rs' --label models
