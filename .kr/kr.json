@@ -1,9 +1,9 @@
 {
-  "name": "kr-demo",
+  "name": "kr",
   "created": "2026-06-24T06:25:54.060039+00:00",
   "sources": [
     {
-      "uri": "file:///path/to/project/README.md",
+      "uri": "README.md",
       "label": "design doc",
       "tags": [
         "design",
@@ -12,7 +12,7 @@
       "added": "2026-06-24T06:25:54.066390+00:00"
     },
     {
-      "uri": "file:///path/to/project/src/main.rs#L1-L30",
+      "uri": "src/main.rs#L1-L30",
       "label": "domain models",
       "tags": [
         "rust",
@@ -21,7 +21,7 @@
       "added": "2026-06-24T06:25:54.071978+00:00"
     },
     {
-      "uri": "file:///path/to/project/src/main.rs#L145-L175",
+      "uri": "src/main.rs#L145-L175",
       "label": "search impl",
       "tags": [
         "rust",
@@ -30,7 +30,7 @@
       "added": "2026-06-24T06:25:54.076985+00:00"
     },
     {
-      "uri": "file:///path/to/project/SKILL.md",
+      "uri": "SKILL.md",
       "label": "agent skill",
       "tags": [
         "skill",
