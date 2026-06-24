@@ -1,6 +1,6 @@
 ---
 id: kr-5cbg
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-06-24T06:41:51Z
@@ -16,3 +16,7 @@ tags: [portability, sharing]
 **2026-06-24T06:42:06Z**
 
 Registries live in ~/.kr/ with no way to share or port. Need: kr export > file.json, kr import < file.json, or kr clone from remote registry.
+
+**2026-06-24T06:58:42Z**
+
+kr export X -o file.json, kr import -i file.json. Also supports stdin/stdout.
