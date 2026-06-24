@@ -3,8 +3,9 @@ use chrono::Utc;
 use clap::{Parser, Subcommand};
 use glob::glob;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── Domain Models ──────────────────────────────────────────────
 
@@ -23,48 +24,180 @@ struct Registry {
     sources: Vec<Source>,
 }
 
-// ── Storage ────────────────────────────────────────────────────
+// ── .krrc Config ───────────────────────────────────────────────
 
-fn registry_dir() -> PathBuf {
-    let dir = dirs::home_dir()
-        .expect("cannot find home directory")
-        .join(".kr");
-    fs::create_dir_all(&dir).expect("cannot create .kr directory");
-    dir
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KrrcConfig {
+    mode: Option<String>,
+    folders: Option<Vec<String>>,
 }
 
-fn registry_path(name: &str) -> PathBuf {
-    registry_dir().join(format!("{name}.json"))
+fn default_mode() -> String {
+    "single".to_string()
+}
+
+// ── Discovery ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct DiscoveryResult {
+    mode: String,
+    current_folder: PathBuf,
+    all_folders: Vec<PathBuf>,
+    explicit_folders: Vec<PathBuf>,
+}
+
+fn find_krrc(path: &Path) -> Option<KrrcConfig> {
+    let krrc_path = path.join(".krrc");
+    if krrc_path.exists() {
+        let data = fs::read_to_string(&krrc_path).ok()?;
+        serde_yaml::from_str(&data).ok()
+    } else {
+        None
+    }
+}
+
+fn discover_kr_folders(folder_override: Option<&[String]>) -> DiscoveryResult {
+    // If --folder is specified, use only those folders
+    if let Some(folders) = folder_override {
+        let paths: Vec<PathBuf> = folders.iter().map(|f| {
+            let p = shellexpand::full(f).expect("expand path").into_owned();
+            PathBuf::from(p)
+        }).collect();
+        return DiscoveryResult {
+            mode: "override".to_string(),
+            current_folder: paths[0].clone(),
+            all_folders: paths,
+            explicit_folders: vec![],
+        };
+    }
+
+    let home = dirs::home_dir().expect("cannot find home directory");
+    let cwd = std::env::current_dir().expect("cannot get cwd");
+
+    // Walk from pwd up to home, collecting .krrc configs and .kr folders
+    let mut all_folders: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut current_folder = home.join(".kr"); // default fallback
+    let mut mode = default_mode();
+    let mut explicit_folders: Vec<PathBuf> = Vec::new();
+
+    let mut current = cwd.clone();
+    loop {
+        // Check for .krrc
+        if let Some(config) = find_krrc(&current) {
+            if let Some(m) = config.mode {
+                mode = m;
+            }
+            if let Some(folders) = config.folders {
+                for f in folders {
+                    let p = shellexpand::full(&f).expect("expand path").into_owned();
+                    let path = PathBuf::from(p);
+                    explicit_folders.push(path.clone());
+                    let key = path.to_string_lossy().to_string();
+                    if seen.insert(key) {
+                        all_folders.push(path);
+                    }
+                }
+            }
+        }
+
+        // Check for .kr folder at this level
+        let kr_folder = current.join(".kr");
+        if kr_folder.exists() && kr_folder.is_dir() {
+            let key = kr_folder.to_string_lossy().to_string();
+            if seen.insert(key) {
+                all_folders.push(kr_folder.clone());
+                current_folder = kr_folder;
+            }
+        }
+
+        // Move up or stop
+        if current == *home || !current.pop() {
+            break;
+        }
+    }
+
+    // Add home .kr as fallback
+    let home_kr = home.join(".kr");
+    let key = home_kr.to_string_lossy().to_string();
+    if seen.insert(key) {
+        all_folders.push(home_kr);
+    }
+
+    // In single mode, only use current folder
+    let effective_folders = if mode == "single" {
+        vec![current_folder.clone()]
+    } else {
+        all_folders.clone()
+    };
+
+    DiscoveryResult {
+        mode,
+        current_folder,
+        all_folders: effective_folders,
+        explicit_folders,
+    }
+}
+
+// ── Storage (multi-folder aware) ───────────────────────────────
+
+fn registry_dir() -> PathBuf {
+    let discovery = discover_kr_folders(None);
+    discovery.current_folder.clone()
+}
+
+fn registry_dirs() -> Vec<PathBuf> {
+    discover_kr_folders(None).all_folders.clone()
+}
+
+fn registry_path(name: &str) -> Option<PathBuf> {
+    for dir in registry_dirs() {
+        let path = dir.join(format!("{name}.json"));
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    // Default to first folder
+    Some(registry_dir().join(format!("{name}.json")))
 }
 
 fn save_registry(registry: &Registry) -> Result<()> {
-    let path = registry_path(&registry.name);
+    let path = registry_dir().join(format!("{}.json", registry.name));
+    fs::create_dir_all(&registry_dir()).ok();
     let data = serde_json::to_string_pretty(registry).context("serialize registry")?;
     fs::write(&path, data).with_context(|| format!("write to {}", path.display()))
 }
 
 fn load_registry(name: &str) -> Result<Registry> {
-    let path = registry_path(name);
+    let path = registry_path(name)
+        .ok_or_else(|| anyhow::anyhow!("registry '{}' not found in any kr folder", name))?;
     let data = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     serde_json::from_str(&data).context("parse registry JSON")
 }
 
 fn list_registries() -> Result<Vec<Registry>> {
-    let dir = registry_dir();
     let mut registries = Vec::new();
-    for entry in fs::read_dir(&dir).context("read registry directory")? {
-        let entry = entry.context("read directory entry")?;
-        let path = entry.path();
-        if path.extension().map_or(false, |e| e == "json") {
-            if let Ok(reg) = load_registry(
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(""),
-            ) {
-                registries.push(reg);
+    for dir in registry_dirs() {
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).context(format!("read {}", dir.display()))? {
+            let entry = entry.context("read directory entry")?;
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "json") {
+                if let Ok(reg) = load_registry(
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(""),
+                ) {
+                    registries.push(reg);
+                }
             }
         }
     }
+    // Deduplicate by name
+    let mut seen = HashSet::new();
+    registries.retain(|r| seen.insert(r.name.clone()));
     Ok(registries)
 }
 
@@ -266,7 +399,6 @@ fn dump_registry(registry: &Registry, tags: &[String]) -> Result<()> {
                 continue;
             }
 
-            // Clean header with range info
             let range = range_label(parsed.line_start, parsed.line_end);
             if let Some(ref label) = source.label {
                 if !range.is_empty() {
@@ -297,6 +429,10 @@ fn dump_registry(registry: &Registry, tags: &[String]) -> Result<()> {
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Comma-delimited list of kr folders to use (overrides mode)
+    #[arg(long, value_delimiter = ',')]
+    folder: Option<Vec<String>>,
 }
 
 #[derive(Subcommand)]
@@ -346,6 +482,8 @@ enum Commands {
         #[arg(short, long)]
         input: Option<String>,
     },
+    /// Discover kr folders — show what kr will search across
+    Discover,
 }
 
 #[derive(Subcommand)]
@@ -413,6 +551,7 @@ enum SourceCmd {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let folder_override = cli.folder.as_ref().map(|v| v.as_slice());
 
     match cli.command {
         Commands::Registry { cmd } => handle_registry(cmd)?,
@@ -445,11 +584,29 @@ fn main() -> Result<()> {
                 buf
             };
             let reg: Registry = serde_json::from_str(&data).context("parse registry JSON")?;
-            if registry_path(&reg.name).exists() {
+            if registry_path(&reg.name).is_some() && registry_path(&reg.name).unwrap().exists() {
                 anyhow::bail!("Registry '{}' already exists", reg.name);
             }
             save_registry(&reg)?;
             println!("✓ Imported registry '{}' with {} sources", reg.name, reg.sources.len());
+        }
+        Commands::Discover => {
+            let discovery = discover_kr_folders(folder_override);
+            println!("Mode: {}", discovery.mode);
+            println!("Current folder: {}", discovery.current_folder.display());
+            println!();
+            println!("Active kr folders:");
+            for (i, f) in discovery.all_folders.iter().enumerate() {
+                let marker = if i == 0 { "●" } else { "○" };
+                println!("  {} {}", marker, f.display());
+            }
+            if !discovery.explicit_folders.is_empty() {
+                println!();
+                println!("Explicit folders (from .krrc):");
+                for f in &discovery.explicit_folders {
+                    println!("  • {}", f.display());
+                }
+            }
         }
     }
 
@@ -459,8 +616,10 @@ fn main() -> Result<()> {
 fn handle_registry(cmd: RegistryCmd) -> Result<()> {
     match cmd {
         RegistryCmd::Create { name } => {
-            if registry_path(&name).exists() {
-                anyhow::bail!("Registry '{}' already exists", name);
+            if let Some(p) = registry_path(&name) {
+                if p.exists() {
+                    anyhow::bail!("Registry '{}' already exists", name);
+                }
             }
             let reg = Registry {
                 name,
@@ -468,7 +627,7 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
                 sources: Vec::new(),
             };
             save_registry(&reg)?;
-            println!("✓ Created registry '{}'", reg.name);
+            println!("✓ Created registry '{}' in {}", reg.name, registry_dir().display());
         }
         RegistryCmd::List => {
             let regs = list_registries()?;
@@ -498,9 +657,12 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
             }
         }
         RegistryCmd::Delete { name } => {
-            let path = registry_path(&name);
-            fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
-            println!("✓ Deleted registry '{}'", name);
+            if let Some(path) = registry_path(&name) {
+                fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
+                println!("✓ Deleted registry '{}'", name);
+            } else {
+                anyhow::bail!("Registry '{}' not found", name);
+            }
         }
     }
     Ok(())
@@ -512,7 +674,6 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
             let mut reg = load_registry(&registry)?;
             let base_idx = reg.sources.len();
 
-            // Check if this is a glob pattern (contains * or ?)
             if uri.contains('*') || uri.contains('?') {
                 for entry in glob(&uri).context("glob pattern")? {
                     match entry {
@@ -534,7 +695,6 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
                 save_registry(&reg)?;
                 println!("✓ Added {} sources from glob", reg.sources.len() - base_idx);
             } else {
-                // Single URI — validate it parses
                 parse_uri(&uri).context("invalid URI format")?;
                 let source = Source {
                     uri,
