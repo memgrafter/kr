@@ -22,6 +22,8 @@ struct Registry {
     name: String,
     created: String,
     sources: Vec<Source>,
+    #[serde(skip)]
+    kr_folder: PathBuf,
 }
 
 // ── .krrc Config ───────────────────────────────────────────────
@@ -168,11 +170,20 @@ fn save_registry(registry: &Registry) -> Result<()> {
     fs::write(&path, data).with_context(|| format!("write to {}", path.display()))
 }
 
+/// Load a registry and set its kr_folder from the file location.
+/// kr_folder is the .kr directory that holds this registry file.
 fn load_registry(name: &str) -> Result<Registry> {
     let path = registry_path(name)
         .ok_or_else(|| anyhow::anyhow!("registry '{}' not found in any kr folder", name))?;
     let data = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&data).context("parse registry JSON")
+    let mut reg: Registry = serde_json::from_str(&data).context("parse registry JSON")?;
+    // Set kr_folder to the .kr directory holding this file
+    if let Some(kr_dir) = path.parent() {
+        reg.kr_folder = kr_dir.to_path_buf();
+    } else {
+        reg.kr_folder = registry_dir();
+    }
+    Ok(reg)
 }
 
 fn list_registries() -> Result<Vec<Registry>> {
@@ -185,11 +196,22 @@ fn list_registries() -> Result<Vec<Registry>> {
             let entry = entry.context("read directory entry")?;
             let path = entry.path();
             if path.extension().map_or(false, |e| e == "json") {
-                if let Ok(reg) = load_registry(
-                    path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(""),
-                ) {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                // Load without kr_folder for listing — just need metadata
+                let data = fs::read_to_string(&path).ok();
+                if let Some(data) = data {
+                    let mut reg: Registry = serde_json::from_str(&data).ok().unwrap_or_else(|| {
+                        Registry {
+                            name: name.to_string(),
+                            created: "?".to_string(),
+                            sources: Vec::new(),
+                            kr_folder: PathBuf::new(),
+                        }
+                    });
+                    reg.kr_folder = dir.clone();
                     registries.push(reg);
                 }
             }
@@ -245,14 +267,6 @@ fn parse_uri(uri: &str) -> Result<ParsedUri> {
     })
 }
 
-fn uri_to_file_path(parsed: &ParsedUri) -> Option<PathBuf> {
-    if parsed.scheme == "file" {
-        parsed.path.as_ref().map(PathBuf::from)
-    } else {
-        None
-    }
-}
-
 // ── Tag Filtering ──────────────────────────────────────────────
 
 fn filter_sources_by_tags<'a>(sources: &'a [Source], tags: &[String]) -> Vec<&'a Source> {
@@ -264,6 +278,74 @@ fn filter_sources_by_tags<'a>(sources: &'a [Source], tags: &[String]) -> Vec<&'a
             .filter(|s| s.tags.iter().any(|t| tags.contains(t)))
             .collect()
     }
+}
+
+// ── Path Resolution ────────────────────────────────────────────
+
+/// Resolve a stored URI to an absolute file path.
+/// Stored URIs are relative to the parent of the .kr folder.
+/// Backward compat: absolute URIs (starting with /) are returned as-is.
+fn resolve_uri(kr_folder: &Path, uri: &str) -> PathBuf {
+    // Strip fragment (line range) first
+    let without_frag = uri.split('#').next().unwrap_or(uri);
+
+    // Strip file:// prefix if present
+    let clean = without_frag.strip_prefix("file://").unwrap_or(without_frag);
+
+    // If already absolute, return as-is (backward compat with old registries)
+    if clean.starts_with('/') {
+        return PathBuf::from(clean);
+    }
+
+    // Expand ~ in the URI itself before joining
+    let expanded = expand_tilde(clean);
+
+    // Join with the parent of the .kr folder
+    let base = kr_folder.parent().unwrap_or_else(|| Path::new("/"));
+    base.join(expanded)
+}
+
+/// Display an absolute path as ~/... if under home, /... otherwise.
+fn display_path(abs: &Path) -> String {
+    let home = dirs::home_dir().expect("cannot find home directory");
+    if let Ok(stripped) = abs.strip_prefix(&home) {
+        format!("~/{}", stripped.display())
+    } else {
+        format!("{}", abs.display())
+    }
+}
+
+/// Expand ~ at the start of a path string.
+fn expand_tilde(path_str: &str) -> String {
+    if let Some(remainder) = path_str.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(remainder).to_string_lossy().to_string();
+        }
+    }
+    path_str.to_string()
+}
+
+/// Convert an absolute path to a relative URI suitable for storage.
+/// If the path is under the .kr parent, store as relative.
+/// If under home but not under .kr parent, store as ~/relative.
+/// Otherwise fall back to absolute (shouldn't happen in normal use).
+fn to_stored_uri(kr_folder: &Path, abs_path: &Path) -> String {
+    let base = kr_folder.parent().unwrap_or_else(|| Path::new("/"));
+
+    // Try relative to .kr parent first
+    if let Ok(rel) = abs_path.strip_prefix(base) {
+        return rel.to_string_lossy().to_string();
+    }
+
+    // Try under home
+    if let Some(home) = dirs::home_dir() {
+        if let Ok(stripped) = abs_path.strip_prefix(&home) {
+            return format!("~/{}", stripped.display());
+        }
+    }
+
+    // Fallback: absolute (shouldn't happen in normal use)
+    abs_path.to_string_lossy().to_string()
 }
 
 // ── Range Helpers ──────────────────────────────────────────────
@@ -300,12 +382,11 @@ fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[Str
 
     for source in filtered {
         let parsed = parse_uri(&source.uri).context(format!("parse URI {}", source.uri))?;
-        if let Some(path) = uri_to_file_path(&parsed) {
-            if path.exists() {
-                file_targets.push((path, parsed.line_start, parsed.line_end));
-            } else {
-                eprintln!("⚠  File not found: {}", path.display());
-            }
+        let path = resolve_uri(&registry.kr_folder, &source.uri);
+        if path.exists() {
+            file_targets.push((path.clone(), parsed.line_start, parsed.line_end));
+        } else {
+            eprintln!("⚠  File not found: {}", display_path(&path));
         }
     }
 
@@ -316,6 +397,7 @@ fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[Str
 
     for (path, start, end) in &file_targets {
         let path_str = path.to_string_lossy().to_string();
+        let display = display_path(path);
 
         match (start, end) {
             (Some(s), Some(e)) => {
@@ -336,7 +418,7 @@ fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[Str
                 let result = child.wait_with_output().context("wait for rg")?;
                 let stdout = String::from_utf8_lossy(&result.stdout);
                 if !stdout.is_empty() {
-                    println!("\n── {} (L{}-L{}) ──", path.display(), s, e);
+                    println!("\n── {} (L{}-L{}) ──", display, s, e);
                     print!("{}", stdout);
                 }
                 continue;
@@ -361,7 +443,7 @@ fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[Str
                 let result = child.wait_with_output().context("wait for rg")?;
                 let stdout = String::from_utf8_lossy(&result.stdout);
                 if !stdout.is_empty() {
-                    println!("\n── {} (L{}+) ──", path.display(), s);
+                    println!("\n── {} (L{}+) ──", display, s);
                     print!("{}", stdout);
                 }
                 continue;
@@ -378,7 +460,7 @@ fn search_registry(registry: &Registry, query: &str, context: usize, tags: &[Str
         let output = cmd.output().context("run rg")?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         if !stdout.is_empty() {
-            println!("\n── {} ──", path.display());
+            println!("\n── {} ──", display);
             print!("{}", stdout);
         }
     }
@@ -393,30 +475,30 @@ fn dump_registry(registry: &Registry, tags: &[String]) -> Result<()> {
 
     for source in filtered {
         let parsed = parse_uri(&source.uri).context(format!("parse URI {}", source.uri))?;
-        if let Some(path) = uri_to_file_path(&parsed) {
-            if !path.exists() {
-                eprintln!("⚠  File not found: {}", path.display());
-                continue;
-            }
+        let path = resolve_uri(&registry.kr_folder, &source.uri);
+        if !path.exists() {
+            eprintln!("⚠  File not found: {}", display_path(&path));
+            continue;
+        }
 
-            let range = range_label(parsed.line_start, parsed.line_end);
-            if let Some(ref label) = source.label {
-                if !range.is_empty() {
-                    println!("\n// {} [{}] — {}", path.display(), range, label);
-                } else {
-                    println!("\n// {} — {}", path.display(), label);
-                }
-            } else if !range.is_empty() {
-                println!("\n// {} [{}]", path.display(), range);
+        let display = display_path(&path);
+        let range = range_label(parsed.line_start, parsed.line_end);
+        if let Some(ref label) = source.label {
+            if !range.is_empty() {
+                println!("\n// {} [{}] — {}", display, range, label);
             } else {
-                println!("\n// {}", path.display());
+                println!("\n// {} — {}", display, label);
             }
+        } else if !range.is_empty() {
+            println!("\n// {} [{}]", display, range);
+        } else {
+            println!("\n// {}", display);
+        }
 
-            let content = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-            let selected = extract_lines(&content, parsed.line_start, parsed.line_end);
-            for line in &selected {
-                println!("{}", line);
-            }
+        let content = fs::read_to_string(&path).with_context(|| format!("read {}", display))?;
+        let selected = extract_lines(&content, parsed.line_start, parsed.line_end);
+        for line in &selected {
+            println!("{}", line);
         }
     }
     Ok(())
@@ -593,18 +675,18 @@ fn main() -> Result<()> {
         Commands::Discover => {
             let discovery = discover_kr_folders(folder_override);
             println!("Mode: {}", discovery.mode);
-            println!("Current folder: {}", discovery.current_folder.display());
+            println!("Current folder: {}", display_path(&discovery.current_folder));
             println!();
             println!("Active kr folders:");
             for (i, f) in discovery.all_folders.iter().enumerate() {
                 let marker = if i == 0 { "●" } else { "○" };
-                println!("  {} {}", marker, f.display());
+                println!("  {} {}", marker, display_path(f));
             }
             if !discovery.explicit_folders.is_empty() {
                 println!();
                 println!("Explicit folders (from .krrc):");
                 for f in &discovery.explicit_folders {
-                    println!("  • {}", f.display());
+                    println!("  • {}", display_path(f));
                 }
             }
         }
@@ -625,9 +707,10 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
                 name,
                 created: Utc::now().to_rfc3339(),
                 sources: Vec::new(),
+                kr_folder: registry_dir(),
             };
             save_registry(&reg)?;
-            println!("✓ Created registry '{}' in {}", reg.name, registry_dir().display());
+            println!("✓ Created registry '{}' in {}", reg.name, display_path(&registry_dir()));
         }
         RegistryCmd::List => {
             let regs = list_registries()?;
@@ -648,11 +731,12 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
             println!("Created:  {}", reg.created);
             println!("Sources:  {}", reg.sources.len());
             if !reg.sources.is_empty() {
-                println!("\n{:<4} {:<12} {:<60}", "Idx", "Label", "URI");
+                println!("\n{:<4} {:<12} {:<60}", "Idx", "Label", "Path");
                 println!("{}", "-".repeat(80));
                 for (i, s) in reg.sources.iter().enumerate() {
                     let label = s.label.as_deref().unwrap_or("-");
-                    println!("{:<4} {:<12} {}", i, label, s.uri);
+                    let resolved = resolve_uri(&reg.kr_folder, &s.uri);
+                    println!("{:<4} {:<12} {}", i, label, display_path(&resolved));
                 }
             }
         }
@@ -678,11 +762,10 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
                 for entry in glob(&uri).context("glob pattern")? {
                     match entry {
                         Ok(path) => {
-                            let path_str = path.to_string_lossy().to_string();
-                            let file_uri = format!("file://{}", path_str);
-                            parse_uri(&file_uri).context(format!("invalid URI from glob: {}", path_str))?;
+                            // Convert absolute path to relative URI for storage
+                            let stored_uri = to_stored_uri(&reg.kr_folder, &path);
                             let source = Source {
-                                uri: file_uri,
+                                uri: stored_uri,
                                 label: label.clone(),
                                 tags: tags.clone(),
                                 added: Utc::now().to_rfc3339(),
@@ -695,9 +778,22 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
                 save_registry(&reg)?;
                 println!("✓ Added {} sources from glob", reg.sources.len() - base_idx);
             } else {
+                // Validate the URI is parseable (catches bad line ranges, etc.)
                 parse_uri(&uri).context("invalid URI format")?;
+
+                // If user supplies file:///absolute, convert to relative
+                let stored_uri = if let Some(rest) = uri.strip_prefix("file://") {
+                    if rest.starts_with('/') {
+                        // Absolute path — convert to relative
+                        to_stored_uri(&reg.kr_folder, &PathBuf::from(rest))
+                    } else {
+                        uri.clone()
+                    }
+                } else {
+                    uri.clone()
+                };
                 let source = Source {
-                    uri,
+                    uri: stored_uri,
                     label,
                     tags,
                     added: Utc::now().to_rfc3339(),
@@ -712,12 +808,14 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
             if reg.sources.is_empty() {
                 println!("No sources in registry '{}'.", registry);
             } else {
-                println!("{:<4} {:<15} {:<10} {}", "Idx", "Label", "Tags", "URI");
+                println!("{:<4} {:<15} {:<10} {}", "Idx", "Label", "Tags", "Path");
                 println!("{}", "-".repeat(90));
                 for (i, s) in reg.sources.iter().enumerate() {
                     let label = s.label.as_deref().unwrap_or("-");
                     let tags = s.tags.join(",");
-                    println!("{:<4} {:<15} {:<10} {}", i, label, tags, s.uri);
+                    let resolved = resolve_uri(&reg.kr_folder, &s.uri);
+                    let path_display = display_path(&resolved);
+                    println!("{:<4} {:<15} {:<10} {}", i, label, tags, path_display);
                 }
             }
         }
@@ -727,8 +825,9 @@ fn handle_source(cmd: SourceCmd) -> Result<()> {
                 anyhow::bail!("Index {} out of range ({} sources)", index, reg.sources.len());
             }
             let removed = reg.sources.remove(index);
+            let resolved = resolve_uri(&reg.kr_folder, &removed.uri);
             save_registry(&reg)?;
-            println!("✓ Removed source: {}", removed.uri);
+            println!("✓ Removed source: {}", display_path(&resolved));
         }
         SourceCmd::Update { registry, index, label, tags } => {
             let mut reg = load_registry(&registry)?;

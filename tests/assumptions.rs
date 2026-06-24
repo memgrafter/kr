@@ -149,7 +149,8 @@ fn source_add_same_file_twice_different_ranges() {
 
     let (out, _err, ok) = run(&["source", "list", &reg]);
     assert!(ok);
-    assert_eq!(out.lines().filter(|l| l.contains("file://")).count(), 2);
+    // URIs are stored relative and displayed as resolved paths — count non-header lines with content
+    assert_eq!(out.lines().filter(|l| l.starts_with('0') || l.starts_with('1')).count(), 2);
 
     run(&["registry", "delete", &reg]);
     cleanup(&file);
@@ -393,7 +394,8 @@ fn remove_first_source_reindexes_remaining() {
 
     let (out, _err, ok) = run(&["source", "list", &reg]);
     assert!(ok);
-    assert!(out.contains("file://"), "should still have one source");
+    // Resolved paths no longer contain file:// — check for the temp dir path instead
+    assert!(out.contains("kr-assumptions"), "should still have one source");
 }
 
 #[test]

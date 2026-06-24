@@ -65,8 +65,8 @@ fn glob_adds_multiple_sources_at_once() {
     assert!(out.contains("Added") && out.contains("sources from glob"));
 
     let (list_out, _err, _ok) = run(&["source", "list", &reg]);
-    // Should have at least 2 sources from glob
-    let source_count = list_out.lines().filter(|l| l.contains("file://")).count();
+    // Should have at least 2 sources from glob — count lines starting with digit (source index)
+    let source_count = list_out.lines().filter(|l| l.chars().next().map_or(false, |c| c.is_ascii_digit())).count();
     assert!(source_count >= 2, "should have at least 2 globbed sources, got {}: {}", source_count, list_out);
 
     run(&["registry", "delete", &reg]);
