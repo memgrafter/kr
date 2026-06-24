@@ -42,6 +42,8 @@ URI formats: `file:///path.rs` (full file), `file:///path.rs#L10-L42` (range), `
 
 **Path resolution**: URIs are stored relative to the `.kr` folder parent. At display time, paths resolve to `~/...` if under home, `/...` otherwise — no brittle absolute paths in the registry file.
 
+**Cross-registration**: A source can belong to multiple KRs if it's relevant to both domains. Overlap is intentional cross-referencing, not duplication.
+
 ## Examples
 
 ```bash
