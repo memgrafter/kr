@@ -1,52 +1,7 @@
+mod common;
+use common::*;
 use std::fs;
 use std::io::Write;
-use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static COUNTER: AtomicU64 = AtomicU64::new(0);
-fn next_id() -> u64 {
-    COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Path to the kr binary (built by cargo test).
-fn kr() -> String {
-    env!("CARGO_BIN_EXE_kr").to_string()
-}
-
-/// Run `kr <args...>` and return (stdout, stderr, success).
-fn run(args: &[&str]) -> (String, String, bool) {
-    let out = Command::new(kr()).args(args).output().expect("run kr");
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    (stdout, stderr, out.status.success())
-}
-
-/// Run `kr <args...>` with owned strings and return (stdout, stderr, success).
-fn run_owned(args: &[String]) -> (String, String, bool) {
-    let out = Command::new(kr())
-        .args(args.iter().map(|s| s.as_str()))
-        .output()
-        .expect("run kr");
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    (stdout, stderr, out.status.success())
-}
-
-/// Create a temp file with given content and return its absolute path.
-fn write_temp(content: &str) -> String {
-    let tmp_dir = std::env::temp_dir().join("kr-test");
-    fs::create_dir_all(&tmp_dir).ok();
-    let id = next_id();
-    let path = tmp_dir.join(format!("test-{}.rs", id));
-    let mut f = fs::File::create(&path).expect("create temp file");
-    f.write_all(content.as_bytes()).expect("write temp file");
-    path.to_string_lossy().to_string()
-}
-
-/// Create a unique registry name.
-fn reg_name(prefix: &str) -> String {
-    format!("{}-{}", prefix, next_id())
-}
 
 /// Clean up a temp file.
 fn cleanup(path: &str) {

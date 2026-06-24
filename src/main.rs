@@ -74,6 +74,18 @@ fn discover_kr_folders(folder_override: Option<&[String]>) -> DiscoveryResult {
         };
     }
 
+    // KR_FOLDER env var overrides all discovery — used by tests for isolation
+    if let Ok(folder) = std::env::var("KR_FOLDER") {
+        let path = PathBuf::from(folder);
+        fs::create_dir_all(&path).ok();
+        return DiscoveryResult {
+            mode: "env-override".to_string(),
+            current_folder: path.clone(),
+            all_folders: vec![path],
+            explicit_folders: vec![],
+        };
+    }
+
     let home = dirs::home_dir().expect("cannot find home directory");
     let cwd = std::env::current_dir().expect("cannot get cwd");
 
@@ -164,8 +176,7 @@ fn registry_path(name: &str) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    // Default to first folder
-    Some(registry_dir().join(format!("{name}.json")))
+    None
 }
 
 fn save_registry(registry: &Registry) -> Result<()> {
@@ -179,7 +190,7 @@ fn save_registry(registry: &Registry) -> Result<()> {
 /// kr_folder is the .kr directory that holds this registry file.
 fn load_registry(name: &str) -> Result<Registry> {
     let path = registry_path(name)
-        .ok_or_else(|| anyhow::anyhow!("registry '{}' not found in any kr folder", name))?;
+        .ok_or_else(|| anyhow::anyhow!("cannot find registry '{}'", name))?;
     let data = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     let mut reg: Registry = serde_json::from_str(&data).context("parse registry JSON")?;
     // Set kr_folder to the .kr directory holding this file
@@ -771,12 +782,43 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
             println!("✓ Updated registry '{}'", name);
         }
         RegistryCmd::Delete { name } => {
-            if let Some(path) = registry_path(&name) {
-                fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
-                println!("✓ Deleted registry '{}'", name);
-            } else {
-                anyhow::bail!("Registry '{}' not found", name);
+            // 1. Name validation — reject path traversal characters
+            if name.contains("..") || name.contains('/') || name.contains('\\') {
+                anyhow::bail!("invalid registry name '{}': must not contain .., /, or \\" , name);
             }
+
+            let path = match registry_path(&name) {
+                Some(p) => p,
+                None => anyhow::bail!("registry '{}' not found", name),
+            };
+
+            // 2. Type check — must be a regular file, not a directory or symlink to directory
+            if !path.is_file() {
+                anyhow::bail!("cannot delete '{}': not a file (is a directory)", path.display());
+            }
+
+            // 3. Path confinement — resolved path must be inside a known .kr folder
+            let kr_dirs = registry_dirs();
+            if !kr_dirs.iter().any(|d| path.starts_with(d)) {
+                anyhow::bail!("cannot delete '{}': path escapes .kr folder", path.display());
+            }
+
+            // 4. Content verification — read JSON and verify name field matches
+            let data = fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            let parsed: Registry = serde_json::from_str(&data)
+                .context("invalid registry file")?;
+            if parsed.name != name {
+                anyhow::bail!(
+                    "cannot delete '{}': content name '{}' does not match filename '{}'",
+                    name,
+                    parsed.name,
+                    path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default()
+                );
+            }
+
+            fs::remove_file(&path).with_context(|| format!("delete {}", path.display()))?;
+            println!("✓ Deleted registry '{}'", name);
         }
     }
     Ok(())

@@ -1,41 +1,7 @@
+mod common;
+use common::*;
 use std::fs;
 use std::io::Write;
-use std::process::Command;
-
-fn kr() -> String {
-    env!("CARGO_BIN_EXE_kr").to_string()
-}
-
-fn run(args: &[&str]) -> (String, String, bool) {
-    let out = Command::new(kr()).args(args).output().expect("run kr");
-    (
-        String::from_utf8_lossy(&out.stdout).to_string(),
-        String::from_utf8_lossy(&out.stderr).to_string(),
-        out.status.success(),
-    )
-}
-
-static mut COUNTER: u64 = 0;
-fn next_id() -> u64 {
-    unsafe { COUNTER += 1; COUNTER }
-}
-
-fn reg_name(prefix: &str) -> String {
-    format!("{}-{}", prefix, next_id())
-}
-
-fn write_temp(content: &str) -> String {
-    let tmp_dir = std::env::temp_dir().join("kr-assumptions");
-    fs::create_dir_all(&tmp_dir).ok();
-    let path = tmp_dir.join(format!("test-{}.rs", next_id()));
-    let mut f = fs::File::create(&path).expect("create temp file");
-    f.write_all(content.as_bytes()).expect("write temp file");
-    path.to_string_lossy().to_string()
-}
-
-fn cleanup(path: &str) {
-    fs::remove_file(path).ok();
-}
 
 // ── Naked CLI ──────────────────────────────────────────────────
 
@@ -395,7 +361,7 @@ fn remove_first_source_reindexes_remaining() {
     let (out, _err, ok) = run(&["source", "list", &reg]);
     assert!(ok);
     // Resolved paths no longer contain file:// — check for the temp dir path instead
-    assert!(out.contains("kr-assumptions"), "should still have one source");
+    assert!(out.contains("kr-test-files"), "should still have one source");
 }
 
 #[test]

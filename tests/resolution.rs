@@ -1,5 +1,7 @@
 //! Tests for URI resolution and display path formatting (kr-64zs)
 
+mod common;
+use common::*;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,9 +11,11 @@ fn bin() -> PathBuf {
 }
 
 fn run(args: &[&str]) -> (String, String, bool) {
+    let folder = common::get_folder_path();
     let output = Command::new(bin())
         .args(args)
         .current_dir(test_dir())
+        .env("KR_FOLDER", folder.to_string_lossy().to_string())
         .output()
         .expect("run kr");
     let out = String::from_utf8_lossy(&output.stdout).to_string();
@@ -212,8 +216,8 @@ fn new_sources_stored_as_relative_uris() {
     ]);
 
     // Read the JSON directly to verify storage format
-    let home = dirs::home_dir().expect("home dir");
-    let json_path = home.join(".kr").join(format!("{}.json", reg));
+    let folder = common::get_folder_path();
+    let json_path = folder.join(format!("{}.json", reg));
     let json_content = fs::read_to_string(&json_path).expect("read registry JSON");
 
     // Should NOT contain file:// prefix
@@ -243,8 +247,8 @@ fn glob_sources_stored_as_relative_uris() {
     ]);
 
     // Read JSON to verify
-    let home = dirs::home_dir().expect("home dir");
-    let json_path = home.join(".kr").join(format!("{}.json", reg));
+    let folder = common::get_folder_path();
+    let json_path = folder.join(format!("{}.json", reg));
     let json_content = fs::read_to_string(&json_path).expect("read registry JSON");
 
     assert!(!json_content.contains("file://"), "glob sources should not store file://: {}", json_content);
