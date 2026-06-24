@@ -21,6 +21,7 @@ struct Source {
 struct Registry {
     name: String,
     created: String,
+    description: Option<String>,
     sources: Vec<Source>,
     #[serde(skip)]
     kr_folder: PathBuf,
@@ -211,6 +212,7 @@ fn list_registries() -> Result<Vec<Registry>> {
                         Registry {
                             name: name.to_string(),
                             created: "?".to_string(),
+                            description: None,
                             sources: Vec::new(),
                             kr_folder: PathBuf::new(),
                         }
@@ -578,6 +580,9 @@ enum RegistryCmd {
     Create {
         /// Registry name
         name: String,
+        /// Short description of the registry purpose (helps the model recall why this KR exists)
+        #[arg(short, long)]
+        description: Option<String>,
     },
     /// List all registries
     List,
@@ -585,6 +590,14 @@ enum RegistryCmd {
     Show {
         /// Registry name
         name: String,
+    },
+    /// Update registry metadata (description)
+    Update {
+        /// Registry name
+        name: String,
+        /// New description
+        #[arg(short, long)]
+        description: Option<String>,
     },
     /// Delete a registry
     Delete {
@@ -701,7 +714,7 @@ fn main() -> Result<()> {
 
 fn handle_registry(cmd: RegistryCmd) -> Result<()> {
     match cmd {
-        RegistryCmd::Create { name } => {
+        RegistryCmd::Create { name, description } => {
             if let Some(p) = registry_path(&name) {
                 if p.exists() {
                     anyhow::bail!("Registry '{}' already exists", name);
@@ -710,6 +723,7 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
             let reg = Registry {
                 name,
                 created: Utc::now().to_rfc3339(),
+                description,
                 sources: Vec::new(),
                 kr_folder: registry_dir(),
             };
@@ -721,19 +735,23 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
             if regs.is_empty() {
                 println!("No registries found.");
             } else {
-                println!("{:<20} {:<10} {}", "Name", "Sources", "Created");
-                println!("{}", "-".repeat(52));
+                println!("{:<20} {:<10} {:<12} {}", "Name", "Sources", "Created", "Description");
+                println!("{}", "-".repeat(80));
                 for r in regs {
                     let created = &r.created[..10];
-                    println!("{:<20} {:<10} {}", r.name, r.sources.len(), created);
+                    let desc = r.description.as_deref().unwrap_or("-");
+                    println!("{:<20} {:<10} {:<12} {}", r.name, r.sources.len(), created, desc);
                 }
             }
         }
         RegistryCmd::Show { name } => {
             let reg = load_registry(&name)?;
-            println!("Registry: {}", reg.name);
-            println!("Created:  {}", reg.created);
-            println!("Sources:  {}", reg.sources.len());
+            println!("Registry:  {}", reg.name);
+            println!("Created:   {}", reg.created);
+            if let Some(ref desc) = reg.description {
+                println!("Description: {}", desc);
+            }
+            println!("Sources:   {}", reg.sources.len());
             if !reg.sources.is_empty() {
                 println!("\n{:<4} {:<12} {:<60}", "Idx", "Label", "Path");
                 println!("{}", "-".repeat(80));
@@ -743,6 +761,14 @@ fn handle_registry(cmd: RegistryCmd) -> Result<()> {
                     println!("{:<4} {:<12} {}", i, label, display_path(&resolved));
                 }
             }
+        }
+        RegistryCmd::Update { name, description } => {
+            let mut reg = load_registry(&name)?;
+            if let Some(desc) = description {
+                reg.description = Some(desc);
+            }
+            save_registry(&reg)?;
+            println!("✓ Updated registry '{}'", name);
         }
         RegistryCmd::Delete { name } => {
             if let Some(path) = registry_path(&name) {

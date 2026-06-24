@@ -1,6 +1,7 @@
 {
   "name": "kr",
   "created": "2026-06-24T06:25:54.060039+00:00",
+  "description": "Knowledge Registry's own knowledge — design doc, domain models, search impl",
   "sources": [
     {
       "uri": "README.md",
