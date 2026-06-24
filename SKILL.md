@@ -1,6 +1,6 @@
 ---
 name: knowledge-registry
-description: Retrieve targeted knowledge from curated sources — register specific files or line ranges as knowledge artifacts, then search or dump them to build focused agent context.
+description: Retrieve targeted knowledge from curated sources — register specific files or line ranges as knowledge artifacts, then search or dump them to build focused agent context. KR and KRs refer to knowledge registries.
 ---
 
 Register specific files or line ranges as curated knowledge — not the whole codebase, that's what git is for. Then retrieve from them — search with rg or dump content — to build focused agent context.
