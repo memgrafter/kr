@@ -2,6 +2,8 @@
 
 A Rust CLI for registering, searching, and managing knowledge sources — files, file ranges, URIs — to build context windows for coding agent sessions.
 
+The agent uses kr to maintain context for aspects of a project without repeated search. No magic, registries are json lists of files, the cli manages them. SKILL.md uses gradual disclosure to inform the agent.
+
 ## Problem
 
 Coding agents need focused context. Scrolling through entire repos wastes tokens and attention. You want to say "here are the 5 files (or file+line ranges) relevant to this task" and have a clean way to search across them as a unit.
