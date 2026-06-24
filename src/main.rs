@@ -79,7 +79,7 @@ fn discover_kr_folders(folder_override: Option<&[String]>) -> DiscoveryResult {
     // Walk from pwd up to home, collecting .krrc configs and .kr folders
     let mut all_folders: Vec<PathBuf> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    let mut current_folder = home.join(".kr"); // default fallback
+    let mut current_folder: Option<PathBuf> = None;
     let mut mode = default_mode();
     let mut explicit_folders: Vec<PathBuf> = Vec::new();
 
@@ -109,7 +109,10 @@ fn discover_kr_folders(folder_override: Option<&[String]>) -> DiscoveryResult {
             let key = kr_folder.to_string_lossy().to_string();
             if seen.insert(key) {
                 all_folders.push(kr_folder.clone());
-                current_folder = kr_folder;
+                // Only set current_folder on first find (closest to cwd)
+                if current_folder.is_none() {
+                    current_folder = Some(kr_folder);
+                }
             }
         }
 
@@ -126,7 +129,8 @@ fn discover_kr_folders(folder_override: Option<&[String]>) -> DiscoveryResult {
         all_folders.push(home_kr);
     }
 
-    // In single mode, only use current folder
+    // In single mode, only use current folder (closest .kr to cwd, or home fallback)
+    let current_folder = current_folder.unwrap_or_else(|| home.join(".kr"));
     let effective_folders = if mode == "single" {
         vec![current_folder.clone()]
     } else {
